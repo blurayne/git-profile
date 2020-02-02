@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# import git-profile as library
+__GIT_PROFILE_SKIP_MAIN=1
+source "$(which git-profile)"
+
+# update local config
+git_hook_update_profile
+
+# execute other local hooks
+exec_local_hook

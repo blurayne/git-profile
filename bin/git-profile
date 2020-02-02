@@ -1,0 +1,783 @@
+#!/bin/bash
+
+##
+# GIT SSH Wrapper to ensure you are conencting to the right account 
+# when using multiple accounts at GitLab or GitHub
+# HTTP https://git-scm.com/docs/gitcredentials
+#
+# Attention
+# 
+# This file only specifies which SSH is used to connect to the right remote repository!
+# It cannot control which git config and therefore committer name to be used!
+#
+# https://mywiki.wooledge.org/glob
+#
+# Usage:
+# 1. Read, understand and customize to your needs!
+# 2. Put `export GIT_SSH="${HOME}/.local/bin/git-ssh-wrapper"` to ${HOME}/.profile (where it get's executed by display manager)
+
+set -euo pipefail -o errtrace
+
+shopt -s extglob
+
+SCRIPT_NAME="${0##*/}"
+
+GIT_CONFIG_PATH="${HOME}/.config/git"
+GIT_PROFILES_PATH="${GIT_CONFIG_PATH}/profile"
+GIT_PROFILE_CONFIG="${GIT_CONFIG_PATH}/profiles"
+
+__GIT_PROFILE_SKIP_MAIN=${__GIT_PROFILE_SKIP_MAIN:-0}
+__GIT_CURRENT_PROFILES=()
+
+##
+# Log to system logger or echo to STDERR
+#
+# debug: tailf /var/log/syslog | grep git-ssh-wrapper
+log() {
+	if [[ -t 0 ]]; then
+		logger -t "${SCRIPT_NAME}" "$@"
+	fi
+	echo -e "$@" >&1
+}
+
+##
+# Error message to STDERR
+#
+# arg1: str Message
+err() {
+	local message="${1}"
+	echo -e "${1}" >&2
+}
+
+##
+
+# Raise error and exist
+#
+# arg1: str Error Message
+# arg2: str Exit code (default: 1)
+raise_err() {
+	local message="${1}"
+	local exit_code="${2:-1}"
+	err "${SCRIPT_NAME}: ${1}"
+	exit "${exit_code}"
+}
+
+##
+# Match string by glob expression
+# Mind extglob and nullglob options!
+#
+# arg1: string  glob expression 
+# arg2: string  text to test against
+globmatch () { 
+	case "${2}" in 
+		${1}) return 0;; 
+	esac
+	return 1
+}
+
+##
+# Init Git Profiles
+profile_init() {
+	touch "${GIT_PROFILE_CONFIG}"
+	local default_profile="$(profile_get_default)"
+	if [[ -z "${default_profile}" ]] ; then
+		default_profile="default"
+		git config -f "${GIT_PROFILE_CONFIG}" core.profile-default "${default_profile}"
+	fi
+	if ! profile_exists "${default_profile}"; then
+		profile_add	"${default_profile}" Default
+		profile_set_default "${default_profile}"
+		profile_auto_select true
+		log "Initialization finished."
+	else
+		check_profile_exists "${default_profile}"
+		log "Nothing todo."
+	fi
+	
+}
+
+##
+# Set Default Profile ID
+#
+# arg1: str Profile ID
+profile_set_default() {
+	local profile_id="${1}"
+	check_profile_exists "${profile_id}"
+	git config -f "${GIT_PROFILE_CONFIG}" core.profile-default "${profile_id}"
+	log "Set default profile to '${profile_id}'"
+}
+
+##
+# Get Default Profile Id
+#
+profile_get_default() {
+	git config -f "${GIT_PROFILE_CONFIG}" core.profile-default
+}
+
+
+##
+# arg1: str <true|false>
+profile_auto_select() {
+	local flag="${1}"
+	git config -f "${GIT_PROFILE_CONFIG}" --bool core.profile-auto-select "${flag}"
+	log "Set profile profile-auto-select to ${flag}"
+}
+
+##
+# arg1: str Profile ID
+# arg2: str Profile Name
+profile_add() {
+	local profile_id="${1}"
+	local profile_name="${2}"
+	if profile_exists "${profile_id}"; then
+		raise_err "profile '${profile_id}' adready exists!"
+	fi
+	if [[ ! -d "${GIT_PROFILES_PATH}" ]]; then
+		mkdir -p "${GIT_PROFILES_PATH}"
+	fi
+	touch "${GIT_PROFILES_PATH}/${profile_id}"
+	git config -f "${GIT_PROFILE_CONFIG}" "profile.${profile_id}.name" "${profile_name}"
+	log "Added profile '${profile_id}' named '${profile_name}'"
+}
+
+
+profile_remove() {
+	local profile_id="${1}"
+	local profile_config_path="$(profile_get_config_file "${profile_id}")"
+	check_profile_exists "${profile_id}"
+	git config -f "${GIT_PROFILE_CONFIG}" --remove-section "profile.${profile_id}" 
+	if [[ -e "${GIT_PROFILES_PATH}" ]]; then
+		rm -f  "${GIT_PROFILES_PATH}/${profile_id}"
+	fi	
+	log "Removed profile '${profile_id}'"
+}
+
+profile_add_remote_match() {
+	local profile_id="${1}"
+	local remote_match="${2}"
+	check_profile_exists "${profile_id}"
+	local profile_config_path="profile.${profile_id}.match-ssh"
+	if [[ "${remote_match}" == "http?://"* ]]; then
+		raise_err "HTTP scheme currently not supported. Please contribute to OpenSource!"
+	fi
+	remote_match="${remote_match##ssh://}"
+	while read current_value; do
+		if [[ "${current_value}" == "${remote_match}" ]]; then
+			raise_err "remote match for '$(printf "%q" "${remote_match}")' has already been set"
+		fi
+	done < <(git config -f "${GIT_PROFILE_CONFIG}" --get-all "${profile_config_path}")
+	git config -f "${GIT_PROFILE_CONFIG}" --add "${profile_config_path}" "${remote_match}"
+	log "Added remote match ${remote_match} to profile ${profile_id}"
+}
+
+
+profile_remove_remote_match() {
+	local profile_id="${1}"
+	local remote_match="${2}"
+	check_profile_exists "${profile_id}"
+	local profile_config_path="profile.${profile_id}.match-ssh"
+	if ! git config -f "${GIT_PROFILE_CONFIG}" --unset-all "${profile_config_path}" "${remote_match}"; then
+		raise_err "could not remove ${remote_match}"
+	fi
+	log "Removed ${remote_match}"
+}
+
+
+profile_add_ssh_identity() {
+	local profile_id="${1}"
+	local ssh_key="${2}"
+	check_profile_exists "${profile_id}"
+	if [[ ! -e "${ssh_key}" ]]; then
+		raise_err "Could not find ${ssh_key}!"
+	fi
+	local ssh_key_realpath="$(realpath "${ssh_key}")"
+	local profile_config_path="profile.${profile_id}.ssh-identity"
+	git config -f "${GIT_PROFILE_CONFIG}" "${profile_config_path}" "${ssh_key_realpath}"
+	log "Set SSH key ${ssh_key_realpath} for profile ${profile_id}"
+}
+
+profile_get_ssh_identity() {
+	local profile_id="${1}"
+	local profile_config_path="profile.${profile_id}.ssh-identity"
+	git config -f "${GIT_PROFILE_CONFIG}" "${profile_config_path}"
+}
+
+profile_add_local_match() {
+	local profile_id="${1}"
+	local local_match="${2}"
+	check_profile_exists "${profile_id}"
+	local profile_config_path="profile.${profile_id}.match-path"
+	if [[ "${local_match:0:1}" == "~" ]]; then
+		local_match="${HOME}/${local_match:2}"
+	fi
+	if [[ "${local_match:0:1}" != "/" ]]; then
+		raise_err "Pathes have to be absolute!"
+	fi
+	if [[ "$(realpath "${local_match}" 2>/dev/null | wc -l  )" == "0" ]]; then
+		raise_err "Path ${local_match} does not exist or could not be resolved!"
+	fi
+	
+	while read current_value; do
+		if [[ "${current_value}" == "${local_match}" ]]; then
+			raise_err "Value '${local_match}' has already been set."
+		fi
+	done < <(git config -f "${GIT_PROFILE_CONFIG}" --get-all "${profile_config_path}")
+	git config -f "${GIT_PROFILE_CONFIG}" --add "${profile_config_path}" "${local_match}" 
+	log "Added local match ${local_match} to profile ${profile_id}"
+}
+
+profile_remove_local_match() {
+	local profile_id="${1}"
+	local local_match="${2}"
+	check_profile_exists "${profile_id}"
+	local profile_config_path="profile.${profile_id}.match-path"
+	if ! git config -f "${GIT_PROFILE_CONFIG}" --unset-all "${profile_config_path}" "${local_match}"; then
+		raise_err "could not remove ${local_match}"
+		
+	fi
+	log "Removed ${local_match}"
+}
+
+profile_list_config() {
+	local profile_id="${1}"
+	check_profile_exists "${profile_id}"
+	git config --show-origin -f "${GIT_PROFILE_CONFIG}" --list | grep "profile\.${profile_id}"
+	local profile_config_file="$(profile_get_config_file "${profile_id}")"
+	git config --show-origin -f "${profile_config_file}" --list
+}
+
+profile_list_config_all() {
+	local profiles=($(list_profile_ids))
+	for profile_id in ${profiles[@]}; do
+		profile_list "${profile_id}"
+	done
+}
+
+profile_get_by_remote() {
+	local remote_hostpath="${1}"
+	local profiles=(list_profile_ids)
+	local profile_object_path=""
+	local profile_id=""
+	local matches=0
+	local match=""
+	local current_match=""
+	if [[ "${remote_hostpath}" == "http?://"* ]]; then
+		raise_err "HTTP scheme currently not supported. Please contribute to OpenSource!"
+	fi
+	remote_hostpath="${remote_hostpath##ssh://}"
+	remote_hostpath="${remote_hostpath//::/:}"
+
+	while read line; do
+		key="${line%=*}"
+		remote_match="${line#*=}"
+		# if prefixed with username - remove
+		if [[ "${remote_hostpath}" =~ '@' ]] && ! [[ "${remote_match}" =~ '@' ]]; then
+			remote_hostpath="${remote_hostpath#*@}"
+		fi
+		# echo "${remote_match}" "${remote_hostpath} x" >&2
+		if globmatch "${remote_match}" "${remote_hostpath}"; then
+			current_match="$(echo -n "${key}" | cut -d. -f2)"
+			if [[ ${current_match} != "${match}" ]]; then
+				match="${current_match}"
+				echo "${match}"
+				matches=$((matches+1))
+			fi
+		fi
+	done < <(git config -f "${GIT_PROFILE_CONFIG}" --list | grep  '^profile\.[[:alnum:]]\+\.match-ssh' || true)
+	if [[ ${matches} -eq 0 ]]; then
+		profile_get_default
+		return 0
+	elif [[ ${matches} -gt 1 ]]; then
+		raise_err "too many profile matches. Please fix your matching remote repo-pathes!"
+	fi
+	return 0
+}
+
+profile_get_by_local() {
+	local local_path="${1}"
+	local local_match=""
+	local profiles=(list_profile_ids)
+	local matches=0
+	local match=""
+	local current_match=""
+	local_path="$(eval realpath "${local_path}")"
+	if [[ -d "${local_path}" ]]; then
+		local_path="${local_path%/}/" # ensure trailing slash for directory matching
+	fi
+	while read line; do
+		key="${line%=*}"
+		local_match=${line#*=}
+		if globmatch "${local_match}" "${local_path}"; then
+			current_match="$(echo -n "${key}" | cut -d. -f2)"
+			if [[ ${current_match} != "${match}" ]]; then
+				match="${current_match}"
+				echo "${match}"
+				matches=$((matches+1))
+			fi
+		fi
+	done < <(git config -f "${GIT_PROFILE_CONFIG}" --list | grep  '^profile\.[[:alnum:]]\+\.match\.local\.path')
+	
+	if [[ ${matches} -eq 0 ]]; then
+		profile_get_default
+		return 0
+	elif [[ ${matches} -gt 1 ]]; then
+		raise_err "Too many profile matches! Please fix your matching pathes!"
+	fi
+	return 0
+}
+
+##
+# Test a remote SSH host
+#
+# arg1  str  Profile ID
+# arg2  str  git@hostname
+# out:  str  SSH command output
+# err:  str  SSH command debug output
+# ret:  int  Return Code from SSH execution
+profile_test_remote() {
+	local profile_id="${1}"
+	local remote_host="${2}"
+	local cmd=(ssh -v)
+	local tmp=$(mktemp)
+	local rc=0
+	if ! [[ "${remote_host}" =~ '@' ]]; then
+		raise_err "please use user@host!"
+	fi
+	if [[ "${remote_host}" =~ '/' ]]; then
+		raise_err "please don't add pathes!"
+	fi
+	local ssh_key="$(profile_get_ssh_identity "${profile_id}")"
+	if [[ -n "${ssh_key}" ]]; then
+		cmd+=(-o IdentitiesOnly=yes -o "IdentityFile=${ssh_key}" -i "${ssh_key}")
+	fi
+	cmd+=("${remote_host}")
+	echo "using: ${cmd[*]}"
+	"${cmd[@]}" | tee "${tmp}" || rc=$?
+	message="$(cat "${tmp}")"
+	rm "${tmp}"
+	echo
+	echo ---
+	if [[ -n "${message}" ]]; then
+		echo
+		echo "Does this look like a good response form SSH?"
+		echo "${message}"
+	else
+		echo "Please review the log for errors!"
+	fi
+	echo 
+	return ${rc}
+}
+
+##
+# Wrapper to git config -f <profile-config>
+#
+# arg1  str  Profile ID
+# out:  str  passthrou
+# err:  str  log output / passthrou
+# ret:  int  passthrou
+profile_config() {
+	local profile_id="${1}"
+	local config="$(profile_get_config_file "${profile_id}")"
+	check_profile_exists "${profile_id}"
+	shift 
+	log "set -f "${config}" $@"
+	git config -f "${config}" "$@"
+}
+
+##
+# List a profile's key/values-pairs
+#
+# out:  str Profile IDs seperated by \n
+profile_list_key_values() {
+	local profile_id="${1}"
+	git config -f "${GIT_PROFILE_CONFIG}" --list | grep -o "^profile\.${profile_id}\." | cut -d. -f2
+}
+
+##
+# List available profile IDs
+# - Cache is used on calling 
+#
+# out:  str Profile IDs seperated by \n
+list_profile_ids() {
+	# do cache to speed things up
+	if [[ -z "${__GIT_CURRENT_PROFILES[*]}" ]]; then
+		__GIT_CURRENT_PROFILES=($(git config -f "${GIT_PROFILE_CONFIG}" --name-only --list | grep -o '^profile\.[[:alnum:]]\+' | cut -d. -f2))
+	fi
+	printf "%s\n" "${__GIT_CURRENT_PROFILES[@]}"
+}
+
+## 
+# Get a profile GIT object path
+#
+# arg1: str     Profile ID
+# out:  string  Object path
+profile_get_config_file() {
+	local profile_id="${1}"
+	echo -n "${GIT_PROFILES_PATH}/${profile_id}"
+}
+
+
+profile_edit() {
+	local profile_id="${1:-}"
+	if [[ -n "${profile_id}" ]]; then
+		check_profile_exists "${profile_id}"
+		git config -f $(profile_get_config_file "${profile_id}") --edit
+	else
+		git config -f ${GIT_PROFILE_CONFIG} --edit
+	fi
+}
+
+## 
+# Get a profile's full name
+#
+# arg1: str     Profile ID
+# out:  str     Profile name
+profile_get_name() {
+	local profile_id="${1}"
+	local object_path="$(profile_get_git_object_path "${profile_id}").name"
+	git config -f "${GIT_PROFILE_CONFIG}" "${object_path}"
+}
+
+## 
+# Get a profile GIT object path
+#
+# arg1: str     Profile ID
+# out:  string  Object path
+profile_get_git_object_path() {
+	local profile_id="${1}"
+	echo -n "profile.${profile_id}"
+}
+
+##
+# Check if GIT profile has initialized
+#
+# ret:  0   Success
+# err:  str Error message
+# exit: 1   Error
+check_git_profile_initalized() {
+	if [[ -z "$(profile_get_default)" ]]; then
+		raise_err "Please first initalize `git profile init` or uninstall git-profile!"
+	fi
+}
+
+
+##
+# Check if profile ID exist
+# - checks also that config to include does exist
+#
+# arg1: str Profile ID
+# err:  str Error message
+# ret:  0   Success
+# exit: 1   Exit on Error
+check_profile_exists() {
+	local profile_id="${1}"
+	for current_profile_id in $(list_profile_ids); do
+		if [[ "${current_profile_id}" == "${profile_id}" ]]; then
+			if [[ ! -e "${GIT_PROFILES_PATH}/${profile_id}" ]]; then
+				raise_err "profile ${GIT_PROFILES_PATH}/${profile_id} does not exist!"
+			fi
+			return 0
+		fi
+	done
+	raise_err "git profile ${profile_id} is not setup!"
+}
+
+##
+# Does profile ID exist in GIT registry?
+#
+# arg1: str  Profile ID
+# ret: [0|1] Success or error
+profile_exists() {
+	local profile_id="${1}"
+	for current_profile_id in $(list_profile_ids); do
+		if [[ "${current_profile_id}" == "${profile_id}" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+
+git_hook_get_profil() {
+	profile_id_default="$(profile_get_default)"
+	profile_id="${profile_id_default}"
+	# search for non-default profile among local pathes
+	profile_id_current="$(profile_get_by_local "${PWD}")"
+	if [[ "${profile_id_current}" != "${profile_id_default}" ]]; then
+		profile_id="${profile_id_current}"
+	fi
+	# search for non-default profile among remote repos
+	while read remote; do
+	profile_id_current="$(profile_get_by_remote "${remote}")"
+	if [[ "${profile_id_current}" != "${profile_id_default}" ]]; then
+		profile_id="${profile_id_current}"
+	fi
+	done < <(git remote -v | awk '{print $2}' | sort | uniq)
+	echo -n ${profile_id}
+}
+
+git_hook_config_abort() {
+	echo "Configuration changed. Please retry!"
+	exit 1
+}
+
+git_hook_update_profile() {
+	local profile_id="$(git_hook_get_profil)"
+	local profile_config_file="$(profile_get_config_file "${profile_id}")"
+	local profile_config_cnt=0
+	local current_config_file=""
+	local profile_name=""
+	while read current_config_file; do
+		if [[ -n "${current_config_file}" ]] &&  [[ ! -e "${current_config_file}" ]]; then
+			raise_err "include.path=${current_config_file} does not exist\nfix by git config --local  --unset-all include.path $(print "%q" "${current_config_file}")!"
+		elif [[ -n "${current_config_file}" ]] &&  [[ "${current_config_file}" != "${profile_config_file}" ]]; then
+			raise_err "include.path=${current_config_file} should be ${profile_config_file} (${profile_id})\nfix by git config --local  --unset-all include.path $(printf "%q" "${current_config_file}")!"
+		fi
+		profile_config_cnt=$((profile_config_cnt+1))
+	done < <(git config --local --get-all include.path | grep "^${GIT_PROFILES_PATH}")
+	if [[ "${profile_config_cnt}" -eq 0 ]]; then
+		echo "setting include.path=${profile_config_cnt} (${profile_id})"
+		git config --local --add include.path "${profile_config_file}"
+		git_hook_config_abort
+	else
+		profile_name="$(profile_get_name "${profile_id}")" 
+		echo "using include.path=${profile_config_cnt} (${profile_name} <${profile_id}>)"
+	fi
+}
+
+git_hook_check_author() {
+	local current_name="$(git config user.name)"
+	local current_email="$(git config user.email)"
+	commit_name="${GIT_AUTHOR_NAME}"
+	commit_email="${GIT_AUTHOR_EMAIL}"
+	if [[ "${current_name}" != "${commit_name}" ]] || [[ "${current_email}" != "${commit_email}" ]]; then
+		echo "GIT_AUTHOR_{NAME,EMAIL} do not match with user.{name,email}: ${current_name} <${current_email}>  – vs. – ${commit_name} <${commit_email}>"
+		git_hook_config_abort
+	fi
+}
+
+exec_local_hook() {
+	# If we have a local commit hook, execute it
+	local local_hook="${PWD}/.git/hooks/$(basename "${0}")"
+	if [[ -e  "${local_hook}" ]]; then
+		echo "Executing local hook"	
+		${local_hook} "$@" || exit $?
+	fi
+}
+
+
+usage() {
+	cat	<<-USAGE
+	usage: ${SCRIPT_NAME} <COMMAND> [<argument>,…]
+
+	COMMANDS
+
+	  add <profile-id> <profile-full-name>
+	      Add a New Profile to Registry and Create Profile Config to Include
+	      (${GIT_CONFIG_PATH}/profile/<profile-name>)
+
+	  add-local-match <repo-path>
+	      Add a Local Pathy Matching Wildcard 
+	      Pathes always have to start with slash ('/'') 
+
+	  add-remote-match <profile> <repo-path>
+	      Add a Remote Repository Matching Wildcard 
+	      Defaults to SSH unless protocol is specified.
+	      <protocol>://<host>:<repo-path> 
+	        e.g. "gitlab.com:my-company/group/supgroup/repo"
+	        e.g. "gitlab.com:my-company/group/supgroup/repo"
+	      Wildcards with extended globbing are supported (see http://man7.org/linux/man-pages/man7/glob.7.html)
+
+	  auto-select <true|false>
+	      Use Profile Auto-Selection?
+
+	  config <profile-id> [options] <object-path> <value>
+	  config <profile-id> [options] <object-path> 
+	      Wrapper to ``git config -f <profile-config>``
+
+	  edit [<profile-id>]
+	      Edit Profiles or Locally Included Config
+
+	  init
+	      Add and Set Default Profile ID to 'default'
+	      Set 'core.profile-auto-select' Profile to true
+					
+	  get-default
+	      Get Default Profile ID
+					
+	  list-ids
+	      List Profile IDs
+
+	  get-by-local <path>
+	      Get Profile ID Auto-Selection by a Local Path
+
+	  get-by-remote <host:path>
+	      Get Profile ID Auto-Selection by Remote Repository URL
+
+	  get-config-file <profile-id>
+	      Get Profile Config File to Include in Local Repo's Git Config
+
+	  get-name <profile-id>
+	      Get a Profile's Full Name
+
+	  remove <profile-id>
+	  rm <profile-id>
+	      Remove a Profile
+
+	  set-default <profile-id>
+	      Set Default Profile ID
+
+	  test-remote <profile-id> <remote-host>
+	      Test Remote with git@<remote-host>!
+
+	      Note:
+	        git often points to GIT bash on host, user auth  is done
+	        by SSH key matching. Use SSH config for extended SSH config!
+
+	  help
+	      Display Command Usage / Help
+
+	EXAMPLE
+
+	  Configuration
+
+	  # default configuration
+	  git profile init
+	  git profile config default user.name "John Doe"
+	  git profile config default user.email "jane@doe.xyz"
+
+	  # add profile for your company
+	  git profile add my-company "ACME"
+	  git profile config my-company user.name "John Doe"
+	  git profile config my-company user.email "john.doe@my-company.com"
+	  git profile add-ssh-identity my-company ~/.config/ssh/my-company
+	  git profile add-local-match my-company "~/Projects/My Company/*"
+	  git profile add-remote-match my-company "gitlab.com:my-company/*"
+
+	  # add your private project
+	  git profile add dark-project "FOSS"
+	  git profile config dark-project user.name "H4xx0r John"
+	  git profile config dark-project user.email "user@hashmail.com"
+	  git profile add-remote-match dark-project "gitlab.com:h4xx0r.john/*"
+	  git profile add-ssh-identity dark-project  ~/.config/ssh/personal
+
+	Note you can launch ``git config -f "${GIT_PROFILE_CONFIG}" --edit`` and search for 'git-profile'
+
+	git-profile will only use user-config stored at ``~/.config/git/`` as configuration. mind that this
+	could conflicts between ``~/.gitconfig`` and ``~/.config/git/config``
+
+	In order to have auto-selection of remote-repository working ensure ``~/.profile`` 
+	has ``export GIT_SSH="${HOME}/.local/bin/git-profile-ssh-wrapper"``.
+
+	USAGE
+}
+
+init() {
+	local bin=""
+	if [[ -z "${GIT_SSH:-}" ]]; then
+		raise_err "Environemnt variable GIT_SSH is empty or not present!"
+		exit 1
+	fi
+	bin="$(which git-profile-ssh-wrapper || true)"
+	if [[ -z "${bin}" ]]; then 
+	 	raise "git-profile-ssh-wrapper could not be found. make sure it is executable and present to PATH!" 
+	elif [[ "${GIT_SSH}" != "${bin}" ]]; then
+		raise_err "GIT_SSH should point to ${bin}"
+	fi
+}
+
+main() {
+	local git_subcommand="${1:-}"
+	local args=("${@:2}")
+	local args_num="${#args[@]}"
+	req_args() {
+		if [[ ${args_num} -ne ${1} ]]; then
+			raise_err "didn't match required arguments list!"
+		fi
+	}
+
+	req_args_min() {
+		if [[ ${args_num} -le ${1} ]]; then
+			raise_err "minimum number of ${1} arguments required!"
+		fi
+	}
+
+	case "${git_subcommand}" in 
+		init) profile_init "${args[@]}";;
+
+		set-default) 
+			req_args 1; profile_set_default "${args[@]}";;
+
+		get-default) 
+			req_args 0; profile_get_default "${args[@]}";;
+
+		add) 
+			req_args 2; profile_add "${args[@]}";;
+
+		edit)
+			profile_edit "${args[@]}";;
+
+		remove) 
+			req_args 1; profile_remove "${args[@]}";;
+
+		add-remote-match) 
+			req_args 2; profile_add_remote_match "${args[@]}";;
+		
+		remove-remote-match) 
+			req_args 2; profile_remove_remote_match "${args[@]}";;
+
+		add-ssh-identity)
+			req_args 2; profile_add_ssh_identity "${args[@]}";;
+
+		add-local-match)
+			req_args 2; profile_add_local_match "${args[@]}";;
+
+		remove-local-match)
+			req_args 2; profile_remove_local_match "${args[@]}";;
+
+		list-ids) 
+			req_args 0; list_profile_ids;;
+
+		list-config) 
+			req_args 1; profile_list_config "${args[@]}";;
+
+		list-config-all) 
+			req_args 0; profile_list_config_all "${args[@]}";;
+
+		get-by-remote) 
+			req_args 1; profile_get_by_remote "${args[@]}";;
+
+		get-ssh-identity) 
+			req_args 1; profile_get_ssh_identity "${args[@]}";;
+
+		get-profile-config-file)
+			req_args 1; profile_get_config_file "${args[@]}";;
+
+		get-by-local)
+			req_args 1; profile_get_by_local "${args[@]}";;
+
+		test-remote)
+			req_args 2; profile_test_remote "${args[@]}";;
+
+		get-name)
+			req_args 1; profile_get_name "${args[@]}";;
+
+		config)
+			req_args_min 1; profile_config "${args[@]}";;
+
+		help)
+			usage; exit 0;;
+
+		*)
+			usage; exit 1;;
+	esac
+}
+
+##
+# Main
+
+init
+
+if [[ ${__GIT_PROFILE_SKIP_MAIN:-0} -ne 1 ]]; then
+	main "${@}"
+fi

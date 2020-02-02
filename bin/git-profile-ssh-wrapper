@@ -1,0 +1,78 @@
+#!/bin/bash
+
+##
+# GIT SSH Wrapper to ensure you are conencting to the right account 
+# when using multiple accounts at GitLab or GitHub
+
+# Attention
+# 
+# This file only specifies which SSH is used to connect to the right remote repository!
+# It cannot control which git config and therefore committer name to be used!
+#
+# Usage:
+# 1. Read, understand and customize to your needs!
+# 2. Put `export GIT_SSH="${HOME}/.local/bin/git-ssh-wrapper"` to ${HOME}/.profile (where it get's executed by display manager)
+
+set -euo pipefail -o errtrace
+
+# echo "$PWD" >&2
+
+__GIT_PROFILE_SKIP_MAIN=1
+source "$(which git-profile)"
+
+SCRIPT_NAME="${0##*/}"
+
+##
+# Log to system logger or echo to STDERR
+#
+# debug: tailf /var/log/syslog | grep git-ssh-wrapper
+log() {
+	if [[ -t 0 ]]; then
+		logger -t "${SCRIPT_NAME}" "$@"
+	fi
+	echo "$@" >&2
+}
+
+###
+# called from git with "${0} <host> <git-shell-command> <repo-path>"
+main() {
+	local git_user_host="${1:-}"
+	local git_host="${git_user_host##*@}" # strip "git@"
+	local git_shell_args=($(eval echo ${2:-}))
+	local git_shell_cmd="${git_shell_args[0]:-undefined}"
+	local ssh_cmd=("$(which ssh)")
+	local repository=""
+	local profile=""
+	local only_ssh_key=""
+
+	# command for "git clone"
+	case "${git_shell_cmd}" in
+		"git-upload-pack"|"git-receive-pack")
+			repository="${git_host}:${repository}:${git_shell_args[1]}";
+			;;
+		"git-lfs-authenticate")
+			repository="${git_host}:${git_shell_args[1]}";
+			;;
+		*) raise_err "unknown command: ${git_shell_cmd}"
+			;;
+	esac
+
+
+	profile_id="$(profile_get_by_remote "${repository}")"
+
+	# if we have a specific ssh key set enforce it!
+	only_ssh_key="$(profile_get_ssh_identity "${profile_id}" || true)"
+	if [[ -n "${only_ssh_key}" ]]; then
+		ssh_cmd+=( \
+			-o IdentitiesOnly=yes -o "IdentityFile=${only_ssh_key}" \
+			-i "${only_ssh_key}" \
+		)
+	fi
+
+	log "Using profile for '${profile_id}'"
+	# echo "${ssh_cmd[@]} ${@}"" >&2
+	# >&2 SSH_AUTH_SOCK=  echo "${ssh_cmd[@]}" "${@}" 
+	SSH_AUTH_SOCK=  "${ssh_cmd[@]}" "${@}"
+}
+
+main "$@"
