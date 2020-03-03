@@ -34,6 +34,7 @@ We wrap communication with remote repositories to a `GIT_SSH`-*wrapper*.
 git profile init
 git profile config default user.name "John Doe"
 git profile config default user.email "jane@doe.xyz"
+git profile add-ssh-identity default ~/.ssh/id_rsa # not required
 
 # add profile for your company
 git profile add my-company "ACME"
@@ -94,73 +95,81 @@ make install
 ## Commands
 
 ```
-  add <profile-id> <profile-full-name>
-      Add a New Profile to Registry and Create Profile Config to Include
-      (/home/ctang/.config/git/profile/<profile-name>)
+add <profile-id> <profile-full-name>
+    Add a New Profile to Registry and Create Profile Config to Include
+    (~/.config/git/profile/<profile-name>)
 
-  add-local-match <repo-path>
-      Add a Local Pathy Matching Wildcard 
-      Pathes always have to start widrwxr-xr-x  ctang  ctang      -   2 hours ago     🗁  hooks/
-th slash ('/'') 
+add-local-match <repo-path>
+    Add a Local Pathy Matching Wildcard 
+    Pathes always have to start with slash ('/') 
 
-  add-remote-match <profile> <repo-path>
-      Add a Remote Repository Matching Wildcard 
-      Defaults to SSH unless protocol is specified.
-      <protocol>://<host>:<repo-path> forceful)
-        e.g. "gitlab.com:my-company/group/supgroup/repo"
-        e.g. "gitlab.com:my-company/group/supgroup/repo"
-      Wildcards with extended globbing are supported (see http://man7.org/linux/man-pages/man7/glob.7.html)
+add-remote-match <profile> <repo-path>
+    Add a Remote Repository Matching Wildcard 
+    Defaults to SSH unless protocol is specified.
+    <protocol>://<host>:<repo-path> forceful)
+      e.g. "gitlab.com:my-company/group/supgroup/repo"
+      e.g. "gitlab.com:my-company/group/supgroup/repo"
+    Wildcards with extended globbing are supported (see http://man7.org/linux/man-pages/man7/glob.7.html)
 
-  auto-select <true|false>
-      Use Profile Auto-Selection?
+auto-select <true|false>
+    Use Profile Auto-Selection?
 
-  config <profile-id> [options] <object-path> <value>
-  config <profile-id> [options] <object-path> 
-      Wrapper to git config -f <profile-config>
+config <profile-id> [options] <object-path> <value>
+config <profile-id> [options] <object-path> 
+    Wrapper to git config -f <profile-config>
 
-  edit [<profile-id>]
-      Edit Profiles or Locally Included Config
+edit [<profile-id>]
+    Edit Profiles or Locally Included Config
 
-  init
-      Add and Set Default Profile ID to 'default'
-      Set 'core.profile-auto-select' Profile to true
+init
+    Add and Set Default Profile ID to 'default'
+    Set 'core.profile-auto-select' Profile to true
 
-  get-default
-      Get Default Profile ID
+get-default
+    Get Default Profile ID
 
-  list-ids
-      List Profile IDs
+list-ids
+    List Profile IDs
 
-  get-by-local <path>
-      Get Profile ID Auto-Selection by a Local Path
+get-by-local <path>
+    Get Profile ID Auto-Selection by a Local Path
 
-  get-by-remote <host:path>
-      Get Profile ID Auto-Selection by Remote Repository URL
+get-by-remote <host:path>
+    Get Profile ID Auto-Selection by Remote Repository URL
 
-  get-config-file <profile-id>drwxr-xr-x  ctang  ctang      -   2 hours ago     🗁  hooks/
+get-config-file <profile-id>
+    Get Profile Config File to Include in Local Repo's Git Config
 
-      Get Profile Config File to Include in Local Repo's Git Config
+get-name <profile-id>
+    Get a Profile's Full Name
 
-  get-name <profile-id>
-      Get a Profile's Full Name
+remove <profile-id>
+rm <profile-id>
+    Remove a ProfileGIT_SSH_DEBUG="${GIT_SSH_DEBUG:-0}"
 
-  remove <profile-id>
-  rm <profile-id>
-      Remove a Profile
+set-default <profile-id>
+    Set Default Profile ID
 
-  set-default <profile-id>
-      Set Default Profile ID
+test-remote <profile-id> <remote-host>
+    Test Remote with git@<remote-host>!
+    Note: git often points to GIT bash on host, user auth  is done
+          by SSH key matching. Use SSH config for extended SSH config!
 
-  test-remote <profile-id> <remote-host>
-      Test Remote with git@<remote-host>!
+help
+    Display Command Usage / Help
 
-      Note:
-        git often points to GIT bash on host, user auth  is done
-        by SSH key matching. Use SSH config for extended SSH config!
+```
 
-  help
-      Display Command Usage / Help
+### Debug
 
+```bash
+# git
+export GIT_TRACE=1
+export GIT_CURL_VERBOSE=1 
+export GIT_SSH_COMMAND="ssh -vvv" # attention before replacing git-profile-ssh-wrapper!	
+
+# git-profile: GIT_SSH_DEBUG 2 => "ssh -v"  3 => "-vv"  4 => "-vvv"
+export GIT_SSH_DEBUG=1 
 ```
 
 ## TODO
