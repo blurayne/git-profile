@@ -1,10 +1,10 @@
 # Contributor Covenant Code of Conduct
 
-## Our Standpoint
+NOTE: The prelude is not part of *Contributor Covenant* – it merely reflects our views. 
 
-*(This is not part of Contributor Covenant)*
+## Prelude
 
-> A Code of Conduct is shall NOT be weaponized for shameless self-radicalisation!
+> A Code of Conduct is shall NOT be weaponized for shameless self-radicalization!
 
 We believe that each person has the right to live his life as he chooses as long
 as he respects the equal rights of others. Every participant should be part in defending
@@ -54,7 +54,6 @@ Be respectful and mind the feelings of others when crude vibrations are on the r
 Linear causality and scapegoats should be rendered a thing of the past!
 
 And now to the [Contributor Covenant][https://www.contributor-covenant.org]:
-
 
 ## Our Pledge
 

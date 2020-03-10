@@ -4,19 +4,18 @@ This is currently is alpha-grade quality. Be careful when using it!
 
 ## Abstract
 
-GIT Profiles solve the issue of GIT having problems on handling multiple user accounts:
+GIT Profiles solves the issue of GIT having problems on handling multiple user accounts:
 
-- It is not possible to distinguish between a private and company account using *github.com* or *gitlab.com*:
+- It is not possible to distinguish between a private and company account using one host like *github.com* or *gitlab.com*:
   - GIT uses git-bash for SSH and authenticates always by SSH user `git` and the SSH public key assigned to an account
   - So selecting the right SSH key by host-name only is NOT possible!
-  - 
-- You often end up having wrongg `user.name` and `user.email` set up
+- You often end up having setup the wrong `user.name` and `user.email` 
 - The [IfInclude](<https://git-scm.com/docs/git-config#_includes>) config directive does only provide a partly solution here
 
-We solve that problems by introducing the concept of *profiles* and let them:
+We solve that problems by introducing the concept of *profiles* and let them match
 
-- match by remote repository
-- match by local working path (extending `includeIf`)
+- by remote repository
+- by local working path (extending `includeIf`)
 
 We wrap communication with remote repositories to a `GIT_SSH`-*wrapper*.
 
@@ -175,7 +174,6 @@ export GIT_SSH_DEBUG=1
 ## TODO
 
 - [ ] HTTP(S) support
-- [ ] First time init has a bug with wrong display
 ## Trackback
 - [Git Hooks documentation](https://git-scm.com/docs/githooks)
 
