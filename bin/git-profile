@@ -536,12 +536,12 @@ git_hook_update_profile() {
 		profile_config_cnt=$((profile_config_cnt+1))
 	done < <(git config --local --get-all include.path | grep "^${GIT_PROFILES_PATH}")
 	if [[ "${profile_config_cnt}" -eq 0 ]]; then
-		echo "setting include.path=${profile_config_cnt} (${profile_id})"
+		echo "Setting include.path to ${profile_name} <${profile_id}>"
 		git config --local --add include.path "${profile_config_file}"
 		git_hook_config_abort
 	else
 		profile_name="$(profile_get_name "${profile_id}")" 
-		echo "using include.path=${profile_config_cnt} (${profile_name} <${profile_id}>)"
+		echo "Using include.path for ${profile_name} <${profile_id}>"
 	fi
 }
 
