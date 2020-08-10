@@ -315,8 +315,8 @@ profile_get_by_local() {
 				matches=$((matches+1))
 			fi
 		fi
-	done < <(git config -f "${GIT_PROFILE_CONFIG}" --list | grep  '^profile\.[[:alnum:]]\+\.match\.local\.path')
-	
+	done < <(git config -f "${GIT_PROFILE_CONFIG}" --list | grep -E '^profile\.[[:alnum:]]+\.match-path' )
+
 	if [[ ${matches} -eq 0 ]]; then
 		profile_get_default
 		return 0
@@ -661,6 +661,8 @@ usage() {
 	  git profile add-remote-match dark-project "gitlab.com:h4xx0r.john/*"
 	  git profile add-ssh-identity dark-project  ~/.config/ssh/personal
 
+	It's possible to overwrite profile id by using env GIT_PROFILE.
+
 	Note you can launch ``git config -f "${GIT_PROFILE_CONFIG}" --edit`` and search for 'git-profile'
 
 	git-profile will only use user-config stored at ``~/.config/git/`` as configuration. mind that this
@@ -720,10 +722,10 @@ main() {
 		remove) 
 			req_args 1; profile_remove "${args[@]}";;
 
-		add-remote-match) 
+		add-remote-match)
 			req_args 2; profile_add_remote_match "${args[@]}";;
-		
-		remove-remote-match) 
+
+		remove-remote-match)
 			req_args 2; profile_remove_remote_match "${args[@]}";;
 
 		add-ssh-identity)

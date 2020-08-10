@@ -68,7 +68,14 @@ main() {
 	esac
 
 
-	profile_id="$(profile_get_by_remote "${repository}")"
+	if [[ -n "${GIT_PROFILE:-}" ]]; then
+		profile_id="${GIT_PROFILE}"
+	else
+		profile_id="$(profile_get_by_remote "${repository}")"
+		if [[ "${profile_id}" == "default" ]]; then
+			profile_id="$(profile_get_by_local "${PWD}")"
+		fi
+	fi
 
 	# if we have a specific ssh key set enforce it!
 	only_ssh_key="$(profile_get_ssh_identity "${profile_id}" || true)"
@@ -92,7 +99,10 @@ main() {
 	if [[ "${GIT_SSH_DEBUG}" -ge 1 ]]; then
 		debug SSH_AUTH_SOCK= "${ssh_cmd[@]}" "${@}" 
 	fi
-	SSH_AUTH_SOCK=  "${ssh_cmd[@]}" "${@}"
+	export SSH_AUTH_SOCK=""
+	export SSH_AGENT_PID=""
+	# echo "${ssh_cmd[@]}" "${@}" >&2
+	"${ssh_cmd[@]}" "${@}"
 }
 
 main "$@"
